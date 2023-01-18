@@ -381,16 +381,6 @@ library Address {
     }
 
     /**
-     * @dev Converts an `address` into `address payable`. Note that this is
-     * simply a type cast: the actual underlying value is not changed.
-     *
-     * _Available since v2.4.0._
-     */
-    function toPayable(address account) internal pure returns (address payable) {
-        return address(uint160(account));
-    }
-
-    /**
      * @dev Replacement for Solidity's `transfer`: sends `amount` wei to
      * `recipient`, forwarding all available gas and reverting on errors.
      *
@@ -921,6 +911,7 @@ interface IERC20Minter {
 
 contract MultiSigBridge is ReentrancyGuard {
     using Address for address;
+    using Address for address payable;
     using SafeERC20 for IERC20;
     using SafeMath for uint256;
     using BytesLib for bytes;
@@ -936,10 +927,10 @@ contract MultiSigBridge is ReentrancyGuard {
     bool public upgrade = false;
     address public upgradeContractAddress = address(0);
 
-    uint public max_managers = 15;
-    uint public min_managers = 3;
-    uint public rate = 66;
-    uint public signatureLength = 65;
+    uint constant max_managers = 15;
+    uint constant min_managers = 3;
+    uint constant rate = 66;
+    uint constant signatureLength = 65;
     uint constant DENOMINATOR = 100;
     uint8 constant VERSION = 3;
     uint public hashSalt; 
@@ -961,6 +952,7 @@ contract MultiSigBridge is ReentrancyGuard {
         owner = msg.sender;
         managerArray = _managers;
         for (uint8 i = 0; i < managerArray.length; i++) {
+            require(managerArray[i] != address(0), "Constructor: Zero address.");
             managers[managerArray[i]] = 1;
             seedManagers[managerArray[i]] = 1;
             seedManagerArray.push(managerArray[i]);
@@ -990,7 +982,7 @@ contract MultiSigBridge is ReentrancyGuard {
             transferERC20(ERC20, to, amount);
         } else {
             require(address(this).balance >= amount, "This contract address does not have sufficient balance of ether");
-            to.transfer(amount);
+            to.sendValue(amount);
             emit TransferFunds(to, amount);
         }
         completeTx(txKey, vHash, 1);
@@ -1089,7 +1081,7 @@ contract MultiSigBridge is ReentrancyGuard {
         return true;
     }
 
-    function ecrecovery(bytes32 hash, bytes memory sig) internal view returns (address) {
+    function ecrecovery(bytes32 hash, bytes memory sig) internal pure returns (address) {
         bytes32 r;
         bytes32 s;
         uint8 v;
@@ -1133,7 +1125,7 @@ contract MultiSigBridge is ReentrancyGuard {
         require(managerArray.length + adds.length - removes.length <= max_managers, "Exceeded the maximum number of managers");
     }
 
-    function calMinSignatures(uint managerCounts) internal view returns (uint8) {
+    function calMinSignatures(uint managerCounts) internal pure returns (uint8) {
         require(managerCounts > 0, "Manager Can't empty.");
         uint numerator = rate * managerCounts + DENOMINATOR - 1;
         return uint8(numerator / DENOMINATOR);
@@ -1217,7 +1209,7 @@ contract MultiSigBridge is ReentrancyGuard {
         require(ERC20.isContract(), "The address is not a contract address");
         IERC20 token = IERC20(ERC20);
         uint256 balance = token.balanceOf(address(this));
-        require(balance >= 0, "No enough balance of token");
+        require(balance > 0, "No enough balance of token");
         token.safeTransfer(upgradeContractAddress, balance, bugERC20s);
         if (isMinterERC20(ERC20)) {
             IERC20Minter minterToken = IERC20Minter(ERC20);
