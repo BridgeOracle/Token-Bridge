@@ -78,6 +78,89 @@ interface IERC20 {
 }
 
 /**
+ * @dev Elliptic Curve Digital Signature Algorithm (ECDSA) operations.
+ *
+ * These functions can be used to verify that a message was signed by the holder
+ * of the private keys of a given address.
+ */
+library ECDSA {
+    /**
+     * @dev Returns the address that signed a hashed message (`hash`) with
+     * `signature`. This address can then be used for verification purposes.
+     *
+     * The `ecrecover` EVM opcode allows for malleable (non-unique) signatures:
+     * this function rejects them by requiring the `s` value to be in the lower
+     * half order, and the `v` value to be either 27 or 28.
+     *
+     * IMPORTANT: `hash` _must_ be the result of a hash operation for the
+     * verification to be secure: it is possible to craft signatures that
+     * recover to arbitrary addresses for non-hashed data. A safe way to ensure
+     * this is by receiving a hash of the original message (which may otherwise
+     * be too long), and then calling {toEthSignedMessageHash} on it.
+     */
+    function recover(bytes32 hash, bytes memory signature) internal pure returns (address) {
+        // Check the signature length
+        if (signature.length != 65) {
+            revert("ECDSA: invalid signature length");
+        }
+
+        // Divide the signature in r, s and v variables
+        bytes32 r;
+        bytes32 s;
+        uint8 v;
+
+        // ecrecover takes the signature parameters, and the only way to get them
+        // currently is to use assembly.
+        // solhint-disable-next-line no-inline-assembly
+        assembly {
+            r := mload(add(signature, 0x20))
+            s := mload(add(signature, 0x40))
+            v := byte(0, mload(add(signature, 0x60)))
+        }
+
+        return recover(hash, v, r, s);
+    }
+
+    /**
+     * @dev Overload of {ECDSA-recover-bytes32-bytes-} that receives the `v`,
+     * `r` and `s` signature fields separately.
+     */
+    function recover(bytes32 hash, uint8 v, bytes32 r, bytes32 s) internal pure returns (address) {
+        // EIP-2 still allows signature malleability for ecrecover(). Remove this possibility and make the signature
+        // unique. Appendix F in the Ethereum Yellow paper (https://ethereum.github.io/yellowpaper/paper.pdf), defines
+        // the valid range for s in (281): 0 < s < secp256k1n ÷ 2 + 1, and for v in (282): v ∈ {27, 28}. Most
+        // signatures from current libraries generate a unique signature with an s-value in the lower half order.
+        //
+        // If your library generates malleable signatures, such as s-values in the upper range, calculate a new s-value
+        // with 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141 - s1 and flip v from 27 to 28 or
+        // vice versa. If your library also generates signatures with 0/1 for v instead 27/28, add 27 to v to accept
+        // these malleable signatures as well.
+        require(uint256(s) <= 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0, "ECDSA: invalid signature 's' value");
+        require(v == 27 || v == 28, "ECDSA: invalid signature 'v' value");
+
+        // If the signature is valid (and not malleable), return the signer address
+        address signer = ecrecover(hash, v, r, s);
+        require(signer != address(0), "ECDSA: invalid signature");
+
+        return signer;
+    }
+
+    /**
+     * @dev Returns an Ethereum Signed Message, created from a `hash`. This
+     * replicates the behavior of the
+     * https://github.com/ethereum/wiki/wiki/JSON-RPC#eth_sign[`eth_sign`]
+     * JSON-RPC method.
+     *
+     * See {recover}.
+     */
+    function toEthSignedMessageHash(bytes32 hash) internal pure returns (bytes32) {
+        // 32 is the length in bytes of hash,
+        // enforced by the type signature above
+        return keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", hash));
+    }
+}
+
+/**
  * @title SafeERC20
  * @dev Wrappers around ERC20 operations that throw on failure (when the token
  * contract returns false). Tokens that return no value (and instead revert or
@@ -953,6 +1036,7 @@ contract MultiSigBridge is ReentrancyGuard {
         managerArray = _managers;
         for (uint8 i = 0; i < managerArray.length; i++) {
             require(managerArray[i] != address(0), "Constructor: Zero address.");
+            require(managers[managerArray[i]] == 0, "Constructor: Duplicate address.");
             managers[managerArray[i]] = 1;
             seedManagers[managerArray[i]] = 1;
             seedManagerArray.push(managerArray[i]);
@@ -1022,7 +1106,8 @@ contract MultiSigBridge is ReentrancyGuard {
 
     function validSignature(bytes32 hash, bytes memory signatures) internal view returns (bool) {
         require(signatures.length <= 975, "Max length of signatures: 975");
-        uint sManagersCount = getManagerFromSignatures(hash, signatures);
+        bytes32 ethSignedMessageHash = ECDSA.toEthSignedMessageHash(hash);
+        uint sManagersCount = getManagerFromSignatures(ethSignedMessageHash, signatures);
         return sManagersCount >= current_min_signatures;
     }
 
@@ -1034,7 +1119,7 @@ contract MultiSigBridge is ReentrancyGuard {
         uint8 j = 0;
         for (uint i = 0; i < times; i++) {
             bytes memory sign = signatures.slice(k, signatureLength);
-            address mAddress = ecrecovery(hash, sign);
+            address mAddress = ECDSA.recover(hash, sign);
             require(mAddress != address(0), "Signatures error");
             if (managers[mAddress] == 1) {
                 signCount++;
@@ -1079,31 +1164,6 @@ contract MultiSigBridge is ReentrancyGuard {
             }
         }
         return true;
-    }
-
-    function ecrecovery(bytes32 hash, bytes memory sig) internal pure returns (address) {
-        bytes32 r;
-        bytes32 s;
-        uint8 v;
-        if (sig.length != signatureLength) {
-            return address(0);
-        }
-        assembly {
-            r := mload(add(sig, 32))
-            s := mload(add(sig, 64))
-            v := byte(0, mload(add(sig, 96)))
-        }
-        if(uint256(s) > 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0) {
-            return address(0);
-        }
-        // https://github.com/ethereum/go-ethereum/issues/2053
-        if (v < 27) {
-            v += 27;
-        }
-        if (v != 27 && v != 28) {
-            return address(0);
-        }
-        return ecrecover(hash, v, r, s);
     }
 
     function preValidateAddsAndRemoves(address[] memory adds, address[] memory removes) internal view {
