@@ -27,6 +27,7 @@ library Create2 {
 
 contract CreateERC20Minter {
 
+    uint8 constant VERSION = 1;
     address public owner;
     address public minter = address(0);
     event Deployed(address addr, uint8 count);
@@ -741,6 +742,7 @@ contract ERC20 is Context, IERC20 {
 
 contract ERC20Minter is Context, ERC20 {
 
+    uint8 constant VERSION = 1;
     address public factory;
     address public current_minter = address(0);
 
